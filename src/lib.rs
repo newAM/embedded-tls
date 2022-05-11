@@ -79,6 +79,8 @@ mod record;
 mod signature_schemes;
 mod supported_versions;
 
+pub use config::NoClock;
+
 #[cfg(feature = "webpki")]
 pub mod webpki;
 

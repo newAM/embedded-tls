@@ -54,3 +54,6 @@ std = ["embedded-io/std"]
 tokio = ["embedded-io/tokio"]
 async = ["embedded-io/async"]
 alloc = []
+
+[workspace]
+members = ["afl"]

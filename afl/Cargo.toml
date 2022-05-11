@@ -1,0 +1,17 @@
+[package]
+name = "embedded-tls-afl"
+version = "0.0.0"
+authors = ["Alex Martens <alex@thinglab.org>"]
+publish = false
+edition = "2021"
+
+[dependencies]
+afl = "0.12"
+embedded-tls = { path = "..", default-features = false }
+rand_core = { version = "0.6.3", default-features = false }
+
+[[bin]]
+name = "gencorpus"
+path = "src/gencorpus.rs"
+test = false
+doc = false
