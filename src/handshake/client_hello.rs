@@ -118,6 +118,11 @@ where
         //self.config.max_fragment_length,
         //));
 
+        // PSK should go last to avoid truncating the transcript hash as much as possible
+        if let Some(psk) = self.config.psk {
+            extensions.push(ClientExtension::PreSharedKey { keys: &[psk] }).map_err(|_| TlsError::EncodeError)?;
+        }
+
         // ----------------------------------------
         // ----------------------------------------
 

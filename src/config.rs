@@ -33,6 +33,27 @@ impl TlsCipherSuite for Aes128GcmSha256 {
     type Hash = Sha256;
 }
 
+pub(crate) struct Psk<'a> {
+    psk: &'a [u8],
+    identity: &'a [u8],
+}
+
+impl<'a> core::fmt::Debug for Psk<'a> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("Psk")
+            .field("psk", &"...")
+            .field("identity", &self.identity)
+            .finish()
+    }
+}
+
+#[cfg(feature = "defmt")]
+impl<'a> defmt::Format for Psk<'a> {
+    fn format(&self, fmt: defmt::Formatter) {
+        defmt::write!(fmt, "Psk {{ psk: ..., identity: {:?} }}", self.identity)
+    }
+}
+
 #[derive(Debug)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct TlsConfig<'a, CipherSuite>
@@ -49,6 +70,7 @@ where
     pub(crate) cert: Option<Certificate<'a>>,
     pub(crate) verify_host: bool,
     pub(crate) verify_cert: bool,
+    pub(crate) psk: Option<Psk<'a>>,
 }
 
 pub trait TlsClock {
@@ -100,6 +122,7 @@ where
             verify_host: true,
             ca: None,
             cert: None,
+            psk: None,
         };
 
         #[cfg(not(feature = "webpki"))]
@@ -178,6 +201,11 @@ where
 
     pub fn with_cert(mut self, cert: Certificate<'a>) -> Self {
         self.cert = Some(cert);
+        self
+    }
+
+    pub fn with_psk(mut self, identity: &'a [u8], psk: &'a [u8]) -> Self {
+        self.psk = Some(Psk { identity, psk });
         self
     }
 }
