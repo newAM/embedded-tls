@@ -73,38 +73,42 @@ where
     }
 
     pub(crate) fn get_server_nonce(&self) -> Result<GenericArray<u8, IvLen>, TlsError> {
-        Ok(self.get_nonce(self.read_counter, &self.get_server_iv()?))
+        let mut iv = self.get_server_iv()?;
+        Self::iv_into_nonce(self.read_counter, &mut iv);
+        Ok(iv)
     }
 
     pub(crate) fn get_client_nonce(&self) -> Result<GenericArray<u8, IvLen>, TlsError> {
-        Ok(self.get_nonce(self.write_counter, &self.get_client_iv()?))
+        let mut iv = self.get_client_iv()?;
+        Self::iv_into_nonce(self.write_counter, &mut iv);
+        Ok(iv)
     }
 
     pub(crate) fn get_server_key(&self) -> Result<GenericArray<u8, KeyLen>, TlsError> {
         self.hkdf_expand_label(
             self.server_traffic_secret.as_ref().unwrap(),
-            &self.make_hkdf_label(b"key", ContextType::None, KeyLen::to_u16())?,
+            &self.make_hkdf_label(b"key", &[], KeyLen::to_u16())?,
         )
     }
 
     pub(crate) fn get_client_key(&self) -> Result<GenericArray<u8, KeyLen>, TlsError> {
         self.hkdf_expand_label(
             self.client_traffic_secret.as_ref().unwrap(),
-            &self.make_hkdf_label(b"key", ContextType::None, KeyLen::to_u16())?,
+            &self.make_hkdf_label(b"key", &[], KeyLen::to_u16())?,
         )
     }
 
     fn get_server_iv(&self) -> Result<GenericArray<u8, IvLen>, TlsError> {
         self.hkdf_expand_label(
             self.server_traffic_secret.as_ref().unwrap(),
-            &self.make_hkdf_label(b"iv", ContextType::None, IvLen::to_u16())?,
+            &self.make_hkdf_label(b"iv", &[], IvLen::to_u16())?,
         )
     }
 
     fn get_client_iv(&self) -> Result<GenericArray<u8, IvLen>, TlsError> {
         self.hkdf_expand_label(
             self.client_traffic_secret.as_ref().unwrap(),
-            &self.make_hkdf_label(b"iv", ContextType::None, IvLen::to_u16())?,
+            &self.make_hkdf_label(b"iv", &[], IvLen::to_u16())?,
         )
     }
 
@@ -113,7 +117,7 @@ where
     ) -> Result<Finished<<D as OutputSizeUser>::OutputSize>, TlsError> {
         let key: GenericArray<u8, D::OutputSize> = self.hkdf_expand_label(
             self.client_traffic_secret.as_ref().unwrap(),
-            &self.make_hkdf_label(b"finished", ContextType::None, D::OutputSize::to_u16())?,
+            &self.make_hkdf_label(b"finished", &[], D::OutputSize::to_u16())?,
         )?;
 
         let mut hmac = SimpleHmac::<D>::new_from_slice(&key).map_err(|_| TlsError::CryptoError)?;
@@ -135,7 +139,7 @@ where
         //info!("size ===> {}", D::OutputSize::to_u16());
         let key: GenericArray<u8, D::OutputSize> = self.hkdf_expand_label(
             self.server_traffic_secret.as_ref().unwrap(),
-            &self.make_hkdf_label(b"finished", ContextType::None, D::OutputSize::to_u16())?,
+            &self.make_hkdf_label(b"finished", &[], D::OutputSize::to_u16())?,
         )?;
         // info!("hmac sign key {:x?}", key);
         let mut hmac = SimpleHmac::<D>::new_from_slice(&key).unwrap();
@@ -146,41 +150,11 @@ where
         //unimplemented!()
     }
 
-    fn get_nonce(&self, counter: u64, iv: &GenericArray<u8, IvLen>) -> GenericArray<u8, IvLen> {
-        //info!("counter = {} {:x?}", counter, &counter.to_be_bytes(),);
-        let counter = Self::pad::<IvLen>(&counter.to_be_bytes());
-
-        //info!("counter = {:x?}", counter);
+    fn iv_into_nonce(counter: u64, iv: &mut GenericArray<u8, IvLen>) {
+        // info!("counter = {:x?}", counter);
         // info!("iv = {:x?}", iv);
-
-        let mut nonce = GenericArray::default();
-
-        for (index, (l, r)) in iv[0..IvLen::to_usize()]
-            .iter()
-            .zip(counter.iter())
-            .enumerate()
-        {
-            nonce[index] = l ^ r
-        }
-
-        //debug!("nonce {:x?}", nonce);
-
-        nonce
-    }
-
-    fn pad<N: ArrayLength<u8>>(input: &[u8]) -> GenericArray<u8, N> {
-        // info!("padding input = {:x?}", input);
-        let mut padded = GenericArray::default();
-        for (index, byte) in input.iter().rev().enumerate() {
-            /*info!(
-                "{} pad {}={:x?}",
-                index,
-                ((N::to_usize() - index) - 1),
-                *byte
-            );*/
-            padded[(N::to_usize() - index) - 1] = *byte;
-        }
-        padded
+        counter.to_be_bytes().iter().enumerate().for_each(|(idx, byte)| iv[idx + 4] ^= byte);
+        // debug!("nonce {:x?}", iv);
     }
 
     fn zero() -> GenericArray<u8, <D as OutputSizeUser>::OutputSize> {
@@ -188,7 +162,7 @@ where
     }
 
     fn derived(&mut self) -> Result<(), TlsError> {
-        self.secret = self.derive_secret(b"derived", ContextType::EmptyHash)?;
+        self.secret = self.derive_secret(b"derived", &D::new().chain_update(&[]).finalize())?;
         Ok(())
     }
 
@@ -227,7 +201,8 @@ where
         client_label: &[u8],
         server_label: &[u8],
     ) -> Result<(), TlsError> {
-        let client_secret = self.derive_secret(client_label, ContextType::TranscriptHash)?;
+        let transcript_hash = self.transcript_hash.as_ref().unwrap().clone().finalize();
+        let client_secret = self.derive_secret(client_label, &transcript_hash)?;
         self.client_traffic_secret
             .replace(Hkdf::from_prk(&client_secret).unwrap());
         /*info!(
@@ -235,7 +210,7 @@ where
             core::str::from_utf8(client_label).unwrap(),
             client_secret
         );*/
-        let server_secret = self.derive_secret(server_label, ContextType::TranscriptHash)?;
+        let server_secret = self.derive_secret(server_label, &transcript_hash)?;
         self.server_traffic_secret
             .replace(Hkdf::from_prk(&server_secret).unwrap());
         /*info!(
@@ -251,9 +226,9 @@ where
     fn derive_secret(
         &mut self,
         label: &[u8],
-        context_type: ContextType,
+        context: &[u8],
     ) -> Result<GenericArray<u8, <D as OutputSizeUser>::OutputSize>, TlsError> {
-        let label = self.make_hkdf_label(label, context_type, D::OutputSize::to_u16())?;
+        let label = self.make_hkdf_label(label, context, D::OutputSize::to_u16())?;
         self.hkdf_expand_label(self.hkdf.as_ref().unwrap(), &label)
     }
 
@@ -294,32 +269,13 @@ where
             .map_err(|_| TlsError::InternalError)?;
 
         let context_len: u8 = u8::try_from(context.len()).map_err(|_| TlsError::InternalError)?;
-        hkdf_label.push(context_len).map_err(|_| TlsError::InternalError)?;
-        hkdf_label.extend_from_slice(context).map_err(|_| TlsError::InternalError)?;
+        hkdf_label
+            .push(context_len)
+            .map_err(|_| TlsError::InternalError)?;
+        hkdf_label
+            .extend_from_slice(context)
+            .map_err(|_| TlsError::InternalError)?;
 
-        match context_type {
-            ContextType::None => {
-                hkdf_label.push(0).map_err(|_| TlsError::InternalError)?;
-            }
-            ContextType::TranscriptHash => {
-                let context = self.transcript_hash.as_ref().unwrap().clone().finalize();
-                hkdf_label
-                    .extend_from_slice(&(context.len() as u8).to_be_bytes())
-                    .map_err(|_| TlsError::InternalError)?;
-                hkdf_label
-                    .extend_from_slice(&context)
-                    .map_err(|_| TlsError::InternalError)?;
-            }
-            ContextType::EmptyHash => {
-                let context = D::new().chain_update(&[]).finalize();
-                hkdf_label
-                    .extend_from_slice(&(context.len() as u8).to_be_bytes())
-                    .map_err(|_| TlsError::InternalError)?;
-                hkdf_label
-                    .extend_from_slice(&context)
-                    .map_err(|_| TlsError::InternalError)?;
-            }
-        }
         Ok(hkdf_label)
     }
 }
