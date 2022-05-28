@@ -31,11 +31,6 @@ const LEGACY_VERSION: u16 = 0x0303;
 
 type Random = [u8; 32];
 
-const HELLO_RETRY_REQUEST_RANDOM: [u8; 32] = [
-    0xCF, 0x21, 0xAD, 0x74, 0xE5, 0x9A, 0x61, 0x11, 0xBE, 0x1D, 0x8C, 0x02, 0x1E, 0x65, 0xB8, 0x91,
-    0xC2, 0xA2, 0x11, 0x16, 0x7A, 0xBB, 0x8C, 0x5E, 0x07, 0x9E, 0x09, 0xE2, 0xC8, 0xA8, 0x33, 0x9C,
-];
-
 #[derive(Debug, Copy, Clone)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum HandshakeType {
@@ -173,7 +168,7 @@ impl<'a, N: ArrayLength<u8>> ServerHandshake<'a, N> {
                         // info!("hash [{:x?}]", &header);
                         digest.update(&header);
                         Ok(ServerHandshake::ServerHello(ServerHello::read(
-                            &rx_buf
+                            rx_buf
                                 .get(4..length + 4)
                                 .ok_or(TlsError::InvalidHandshake)?,
                             digest,

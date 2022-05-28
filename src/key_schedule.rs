@@ -30,12 +30,6 @@ where
     _iv_len: PhantomData<IvLen>,
 }
 
-enum ContextType {
-    None,
-    TranscriptHash,
-    EmptyHash,
-}
-
 impl<D, KeyLen, IvLen> KeySchedule<D, KeyLen, IvLen>
 where
     D: Digest + Reset + Clone + OutputSizeUser + BlockSizeUser,
@@ -279,7 +273,7 @@ where
     fn make_hkdf_label(
         &self,
         label: &[u8],
-        context_type: ContextType,
+        context: &[u8],
         len: u16,
     ) -> Result<Vec<u8, 512>, TlsError> {
         //info!("make label {:?} {}", label, len);
@@ -298,6 +292,10 @@ where
         hkdf_label
             .extend_from_slice(label)
             .map_err(|_| TlsError::InternalError)?;
+
+        let context_len: u8 = u8::try_from(context.len()).map_err(|_| TlsError::InternalError)?;
+        hkdf_label.push(context_len).map_err(|_| TlsError::InternalError)?;
+        hkdf_label.extend_from_slice(context).map_err(|_| TlsError::InternalError)?;
 
         match context_type {
             ContextType::None => {
