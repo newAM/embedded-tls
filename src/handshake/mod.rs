@@ -2,7 +2,6 @@ use generic_array::ArrayLength;
 
 //use p256::elliptic_curve::AffinePoint;
 use crate::buffer::*;
-use crate::config::TlsCipherSuite;
 use crate::handshake::certificate::CertificateRef;
 use crate::handshake::certificate_request::CertificateRequestRef;
 use crate::handshake::certificate_verify::CertificateVerify;
@@ -11,11 +10,13 @@ use crate::handshake::encrypted_extensions::EncryptedExtensions;
 use crate::handshake::finished::Finished;
 use crate::handshake::new_session_ticket::NewSessionTicket;
 use crate::handshake::server_hello::ServerHello;
+use crate::key_schedule::DIGEST_MAX_OUTPUT_SIZE;
 use crate::parse_buffer::ParseBuffer;
 use crate::TlsError;
 use core::fmt::{Debug, Formatter};
 use core::ops::Range;
 use digest::OutputSizeUser;
+use heapless::Vec;
 use sha2::Digest;
 
 pub mod certificate;
@@ -66,19 +67,13 @@ impl HandshakeType {
     }
 }
 
-pub enum ClientHandshake<'config, 'a, CipherSuite>
-where
-    CipherSuite: TlsCipherSuite,
-{
+pub enum ClientHandshake<'config, 'a> {
     ClientCert(CertificateRef<'a>),
-    ClientHello(ClientHello<'config, CipherSuite>),
-    Finished(Finished<<CipherSuite::Hash as OutputSizeUser>::OutputSize>),
+    ClientHello(ClientHello<'config>),
+    Finished(Finished),
 }
 
-impl<'config, 'a, CipherSuite> ClientHandshake<'config, 'a, CipherSuite>
-where
-    CipherSuite: TlsCipherSuite,
-{
+impl<'config, 'a> ClientHandshake<'config, 'a> {
     pub(crate) fn encode(&self, buf: &mut CryptoBuffer<'_>) -> Result<Range<usize>, TlsError> {
         let content_marker = buf.len();
         let handshake_type = match self {
@@ -114,17 +109,17 @@ where
     }
 }
 
-pub enum ServerHandshake<'a, N: ArrayLength<u8>> {
+pub enum ServerHandshake<'a> {
     ServerHello(ServerHello<'a>),
     EncryptedExtensions(EncryptedExtensions<'a>),
     NewSessionTicket(NewSessionTicket<'a>),
     Certificate(CertificateRef<'a>),
     CertificateRequest(CertificateRequestRef<'a>),
     CertificateVerify(CertificateVerify<'a>),
-    Finished(Finished<N>),
+    Finished(Finished),
 }
 
-impl<'a, N: ArrayLength<u8>> Debug for ServerHandshake<'a, N> {
+impl<'a> Debug for ServerHandshake<'a> {
     fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
         match self {
             ServerHandshake::ServerHello(inner) => Debug::fmt(inner, f),
@@ -139,7 +134,7 @@ impl<'a, N: ArrayLength<u8>> Debug for ServerHandshake<'a, N> {
 }
 
 #[cfg(feature = "defmt")]
-impl<'a, N: ArrayLength<u8>> defmt::Format for ServerHandshake<'a, N> {
+impl<'a> defmt::Format for ServerHandshake<'a> {
     fn format(&self, f: defmt::Formatter<'_>) {
         match self {
             ServerHandshake::ServerHello(inner) => defmt::write!(f, "{}", inner),
@@ -153,11 +148,11 @@ impl<'a, N: ArrayLength<u8>> defmt::Format for ServerHandshake<'a, N> {
     }
 }
 
-impl<'a, N: ArrayLength<u8>> ServerHandshake<'a, N> {
+impl<'a> ServerHandshake<'a> {
     pub fn read<D: Digest>(
         rx_buf: &'a mut [u8],
         digest: &mut D,
-    ) -> Result<ServerHandshake<'a, N>, TlsError> {
+    ) -> Result<ServerHandshake<'a>, TlsError> {
         let header = &rx_buf.get(0..4).ok_or(TlsError::InvalidHandshake)?;
         match HandshakeType::of(header[0]) {
             None => Err(TlsError::InvalidHandshake),
@@ -191,7 +186,7 @@ impl<'a, N: ArrayLength<u8>> ServerHandshake<'a, N> {
         }
     }
 
-    pub fn parse(buf: &mut ParseBuffer<'a>) -> Result<ServerHandshake<'a, N>, TlsError> {
+    pub fn parse(buf: &mut ParseBuffer<'a>) -> Result<ServerHandshake<'a>, TlsError> {
         let handshake_type =
             HandshakeType::of(buf.read_u8().map_err(|_| TlsError::InvalidHandshake)?)
                 .ok_or(TlsError::InvalidHandshake)?;

@@ -4,7 +4,7 @@ use p256::elliptic_curve::rand_core::{CryptoRng, RngCore};
 use p256::EncodedPoint;
 
 use crate::buffer::*;
-use crate::config::{TlsCipherSuite, TlsConfig};
+use crate::config::TlsConfig;
 use crate::extensions::ClientExtension;
 use crate::handshake::{Random, LEGACY_VERSION};
 use crate::named_groups::NamedGroup;
@@ -12,20 +12,49 @@ use crate::signature_schemes::SignatureScheme;
 use crate::supported_versions::{ProtocolVersion, TLS13};
 use crate::TlsError;
 
-pub struct ClientHello<'config, CipherSuite>
-where
-    CipherSuite: TlsCipherSuite,
-{
-    config: &'config TlsConfig<'config, CipherSuite>,
+const TLS_AES_128_GCM_SHA256: [u8; 2] = [0x13, 0x01];
+
+#[cfg(feature = "tls_aes_256_gcm_sha384")]
+const TLS_AES_256_GCM_SHA384: [u8; 2] = [0x13, 0x02];
+#[cfg(not(feature = "tls_aes_256_gcm_sha384"))]
+const TLS_AES_256_GCM_SHA384: [u8; 0] = [];
+
+const SUPPORTED_CIPHER_SUITES_LEN: u16 =
+    (TLS_AES_128_GCM_SHA256.len() + TLS_AES_256_GCM_SHA384.len()) as u16;
+
+macro_rules! const_concat_bytes {
+    ($a:expr, $b:expr $(,)*) => {{
+        const __LEN: usize = $a.len() + $b.len();
+        const __CONCATENATED: [u8; __LEN] = {
+            let mut out: [u8; __LEN] = [0u8; __LEN];
+            let mut i = 0;
+            while i < $a.len() {
+                out[i] = $a[i];
+                i += 1;
+            }
+            i = 0;
+            while i < $b.len() {
+                out[i + $a.len()] = $b[i];
+                i += 1;
+            }
+            out
+        };
+
+        __CONCATENATED
+    }};
+}
+
+const SUPPORTED_CIPHER_SUITES: [u8; (SUPPORTED_CIPHER_SUITES_LEN as usize)] =
+    const_concat_bytes!(TLS_AES_128_GCM_SHA256, TLS_AES_256_GCM_SHA384,);
+
+pub struct ClientHello<'config> {
+    config: &'config TlsConfig<'config>,
     random: Random,
     pub(crate) secret: EphemeralSecret,
 }
 
-impl<'config, CipherSuite> ClientHello<'config, CipherSuite>
-where
-    CipherSuite: TlsCipherSuite,
-{
-    pub fn new<RNG>(config: &'config TlsConfig<'config, CipherSuite>, rng: &mut RNG) -> Self
+impl<'config> ClientHello<'config> {
+    pub fn new<RNG>(config: &'config TlsConfig<'config>, rng: &mut RNG) -> Self
     where
         RNG: CryptoRng + RngCore,
     {
@@ -51,14 +80,10 @@ where
         // session id (empty)
         buf.push(0).map_err(|_| TlsError::EncodeError)?;
 
-        // cipher suites (2+)
-        //buf.extend_from_slice(&((self.config.cipher_suites.len() * 2) as u16).to_be_bytes());
-        //for c in self.config.cipher_suites.iter() {
-        //buf.extend_from_slice(&(*c as u16).to_be_bytes());
-        //}
-        buf.extend_from_slice(&2u16.to_be_bytes())
+        // cipher suites
+        buf.extend_from_slice(&SUPPORTED_CIPHER_SUITES_LEN.to_be_bytes())
             .map_err(|_| TlsError::EncodeError)?;
-        buf.extend_from_slice(&CipherSuite::CODE_POINT.to_be_bytes())
+        buf.extend_from_slice(&SUPPORTED_CIPHER_SUITES)
             .map_err(|_| TlsError::EncodeError)?;
 
         // compression methods, 1 byte of 0
@@ -120,7 +145,9 @@ where
 
         // PSK should go last to avoid truncating the transcript hash as much as possible
         if let Some(psk) = self.config.psk {
-            extensions.push(ClientExtension::PreSharedKey { keys: &[psk] }).map_err(|_| TlsError::EncodeError)?;
+            extensions
+                .push(ClientExtension::PreSharedKey { keys: &[psk] })
+                .map_err(|_| TlsError::EncodeError)?;
         }
 
         // ----------------------------------------

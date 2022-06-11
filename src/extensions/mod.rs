@@ -4,10 +4,10 @@ pub mod server;
 use crate::signature_schemes::SignatureScheme;
 
 use crate::buffer::*;
-use crate::Psk;
 use crate::max_fragment_length::MaxFragmentLength;
 use crate::named_groups::NamedGroup;
 use crate::supported_versions::ProtocolVersions;
+use crate::Psk;
 use crate::TlsError;
 use heapless::Vec;
 
@@ -90,7 +90,9 @@ pub enum ClientExtension<'a> {
         supported_signature_algorithms: Vec<SignatureScheme, 16>,
     },
     MaxFragmentLength(MaxFragmentLength),
-    PreSharedKey { keys: &'a [Psk<'a>] },
+    PreSharedKey {
+        keys: &'a [Psk<'a>],
+    },
 }
 
 impl ClientExtension<'_> {
@@ -107,9 +109,7 @@ impl ClientExtension<'_> {
                 ExtensionType::SignatureAlgorithmsCert as u16
             }
             ClientExtension::MaxFragmentLength(_) => ExtensionType::MaxFragmentLength as u16,
-            ClientExtension::PreSharedKey { .. } => {
-                ExtensionType::PreSharedKey as u16
-            }
+            ClientExtension::PreSharedKey { .. } => ExtensionType::PreSharedKey as u16,
         }
         .to_be_bytes()
     }
@@ -200,9 +200,7 @@ impl ClientExtension<'_> {
                 //info!("max fragment length");
                 buf.push(*len as u8).map_err(|_| TlsError::EncodeError)?;
             }
-            ClientExtension::PreSharedKey { keys } => {
-
-            }
+            ClientExtension::PreSharedKey { keys } => {}
         }
 
         //info!("tail at {}", buf.len());

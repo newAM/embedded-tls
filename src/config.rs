@@ -14,25 +14,6 @@ use typenum::{U12, U16};
 
 const TLS_RECORD_MAX: usize = 16384;
 
-pub trait TlsCipherSuite {
-    const CODE_POINT: u16;
-    type Cipher: NewAead<KeySize = Self::KeyLen> + AeadInPlace<NonceSize = Self::IvLen>;
-    type KeyLen: ArrayLength<u8>;
-    type IvLen: ArrayLength<u8>;
-
-    type Hash: Digest + Reset + Clone + OutputSizeUser + BlockSizeUser + FixedOutput;
-}
-
-pub struct Aes128GcmSha256;
-impl TlsCipherSuite for Aes128GcmSha256 {
-    const CODE_POINT: u16 = CipherSuite::TlsAes128GcmSha256 as u16;
-    type Cipher = Aes128Gcm;
-    type KeyLen = U16;
-    type IvLen = U12;
-
-    type Hash = Sha256;
-}
-
 pub(crate) struct Psk<'a> {
     psk: &'a [u8],
     identity: &'a [u8],
@@ -56,13 +37,8 @@ impl<'a> defmt::Format for Psk<'a> {
 
 #[derive(Debug)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
-pub struct TlsConfig<'a, CipherSuite>
-where
-    CipherSuite: TlsCipherSuite,
-{
-    //pub(crate) cipher_suites: Vec<CipherSuite, U16>,
+pub struct TlsConfig<'a> {
     pub(crate) server_name: Option<&'a str>,
-    pub(crate) cipher_suite: PhantomData<CipherSuite>,
     pub(crate) signature_schemes: Vec<SignatureScheme, 16>,
     pub(crate) named_groups: Vec<NamedGroup, 16>,
     pub(crate) max_fragment_length: MaxFragmentLength,
@@ -87,33 +63,27 @@ impl TlsClock for NoClock {
 
 #[derive(Debug)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
-pub struct TlsContext<'a, CipherSuite, RNG>
+pub struct TlsContext<'a, RNG>
 where
-    CipherSuite: TlsCipherSuite,
     RNG: CryptoRng + RngCore + 'a,
 {
-    pub(crate) config: &'a TlsConfig<'a, CipherSuite>,
+    pub(crate) config: &'a TlsConfig<'a>,
     pub(crate) rng: &'a mut RNG,
 }
 
-impl<'a, CipherSuite, RNG> TlsContext<'a, CipherSuite, RNG>
+impl<'a, RNG> TlsContext<'a, RNG>
 where
-    CipherSuite: TlsCipherSuite,
     RNG: CryptoRng + RngCore + 'a,
 {
     /// Create a new context with a given config and random number generator reference.
-    pub fn new(config: &'a TlsConfig<'a, CipherSuite>, rng: &'a mut RNG) -> Self {
+    pub fn new(config: &'a TlsConfig<'a>, rng: &'a mut RNG) -> Self {
         Self { config, rng }
     }
 }
 
-impl<'a, CipherSuite> TlsConfig<'a, CipherSuite>
-where
-    CipherSuite: TlsCipherSuite,
-{
+impl<'a> TlsConfig<'a> {
     pub fn new() -> Self {
         let mut config = Self {
-            cipher_suite: PhantomData,
             signature_schemes: Vec::new(),
             named_groups: Vec::new(),
             max_fragment_length: MaxFragmentLength::Bits10,
@@ -210,10 +180,7 @@ where
     }
 }
 
-impl<'a, CipherSuite> Default for TlsConfig<'a, CipherSuite>
-where
-    CipherSuite: TlsCipherSuite,
-{
+impl<'a> Default for TlsConfig<'a> {
     fn default() -> Self {
         TlsConfig::new()
     }

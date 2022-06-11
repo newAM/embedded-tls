@@ -22,21 +22,19 @@ const TLS_RECORD_OVERHEAD: usize = 128;
 /// Type representing an async TLS connection. An instance of this type can
 /// be used to establish a TLS connection, write and read encrypted data over this connection,
 /// and closing to free up the underlying resources.
-pub struct TlsConnection<'a, Socket, CipherSuite>
+pub struct TlsConnection<'a, Socket>
 where
     Socket: Read + Write + 'a,
-    CipherSuite: TlsCipherSuite + 'static,
 {
     delegate: Socket,
-    key_schedule: KeySchedule<CipherSuite::Hash, CipherSuite::KeyLen, CipherSuite::IvLen>,
+    key_schedule: KeySchedule,
     record_buf: &'a mut [u8],
     opened: bool,
 }
 
-impl<'a, Socket, CipherSuite> TlsConnection<'a, Socket, CipherSuite>
+impl<'a, Socket> TlsConnection<'a, Socket>
 where
     Socket: Read + Write + 'a,
-    CipherSuite: TlsCipherSuite + 'static,
 {
     /// Create a new TLS connection with the provided context and a I/O implementation
     ///
@@ -65,12 +63,12 @@ where
         const CERT_SIZE: usize,
     >(
         &mut self,
-        context: TlsContext<'m, CipherSuite, RNG>,
+        context: TlsContext<'m, RNG>,
     ) -> Result<(), TlsError>
     where
         'a: 'm,
     {
-        let mut handshake: Handshake<CipherSuite, CERT_SIZE> = Handshake::new();
+        let mut handshake: Handshake<CERT_SIZE> = Handshake::new();
         let mut state = State::ClientHello;
 
         loop {
@@ -107,7 +105,7 @@ where
                 let delegate = &mut self.delegate;
                 let key_schedule = &mut self.key_schedule;
                 let to_write = core::cmp::min(remaining, max_block_size);
-                let record: ClientRecord<'a, '_, CipherSuite> =
+                let record: ClientRecord<'a, '_> =
                     ClientRecord::ApplicationData(&buf[wp..to_write]);
 
                 let (_, len) = encode_record(self.record_buf, key_schedule, &record)?;
@@ -136,13 +134,10 @@ where
             while remaining == buf.len() {
                 let socket = &mut self.delegate;
                 let key_schedule = &mut self.key_schedule;
-                let record = decode_record_blocking::<Socket, CipherSuite>(
-                    socket,
-                    self.record_buf,
-                    key_schedule,
-                )?;
+                let record =
+                    decode_record_blocking::<Socket>(socket, self.record_buf, key_schedule)?;
                 let mut records = Queue::new();
-                decrypt_record::<CipherSuite>(key_schedule, &mut records, record)?;
+                decrypt_record(key_schedule, &mut records, record)?;
                 while let Some(record) = records.dequeue() {
                     match record {
                         ServerRecord::ApplicationData(ApplicationData { header: _, data }) => {
@@ -194,7 +189,7 @@ where
         let mut delegate = self.delegate;
         let record_buf = self.record_buf;
 
-        let (_, len) = encode_record::<CipherSuite>(record_buf, &mut key_schedule, &record)?;
+        let (_, len) = encode_record(record_buf, &mut key_schedule, &record)?;
 
         delegate
             .write(&record_buf[..len])
@@ -206,28 +201,25 @@ where
     }
 }
 
-impl<'a, Socket, CipherSuite> Io for TlsConnection<'a, Socket, CipherSuite>
+impl<'a, Socket> Io for TlsConnection<'a, Socket>
 where
     Socket: Read + Write + 'a,
-    CipherSuite: TlsCipherSuite + 'static,
 {
     type Error = TlsError;
 }
 
-impl<'a, Socket, CipherSuite> Read for TlsConnection<'a, Socket, CipherSuite>
+impl<'a, Socket> Read for TlsConnection<'a, Socket>
 where
     Socket: Read + Write + 'a,
-    CipherSuite: TlsCipherSuite + 'static,
 {
     fn read(&mut self, buf: &mut [u8]) -> Result<usize, Self::Error> {
         TlsConnection::read(self, buf)
     }
 }
 
-impl<'a, Socket, CipherSuite> Write for TlsConnection<'a, Socket, CipherSuite>
+impl<'a, Socket> Write for TlsConnection<'a, Socket>
 where
     Socket: Read + Write + 'a,
-    CipherSuite: TlsCipherSuite + 'static,
 {
     fn write(&mut self, buf: &[u8]) -> Result<usize, Self::Error> {
         TlsConnection::write(self, buf)

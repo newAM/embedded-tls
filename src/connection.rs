@@ -1,6 +1,6 @@
-use crate::config::{TlsCipherSuite, TlsClock, TlsConfig};
+use crate::config::{TlsClock, TlsConfig};
 use crate::handshake::{ClientHandshake, ServerHandshake};
-use crate::key_schedule::KeySchedule;
+use crate::key_schedule::{KeySchedule, NegotiatedHash, DIGEST_MAX_OUTPUT_SIZE};
 use crate::record::{ClientRecord, RecordHeader, ServerRecord};
 use crate::verify::{verify_certificate, verify_signature};
 use crate::TlsError;
@@ -45,14 +45,11 @@ use aes_gcm::aead::{AeadCore, AeadInPlace, NewAead};
 use digest::OutputSizeUser;
 use heapless::spsc::Queue;
 
-pub(crate) fn decrypt_record<'m, CipherSuite>(
-    key_schedule: &mut KeySchedule<CipherSuite::Hash, CipherSuite::KeyLen, CipherSuite::IvLen>,
-    records: &mut Queue<ServerRecord<'m, <CipherSuite::Hash as OutputSizeUser>::OutputSize>, 4>,
-    record: ServerRecord<'m, <CipherSuite::Hash as OutputSizeUser>::OutputSize>,
-) -> Result<(), TlsError>
-where
-    CipherSuite: TlsCipherSuite + 'static,
-{
+pub(crate) fn decrypt_record<'m>(
+    key_schedule: &mut KeySchedule,
+    records: &mut Queue<ServerRecord<'m>, 4>,
+    record: ServerRecord<'m>,
+) -> Result<(), TlsError> {
     if let ServerRecord::ApplicationData(ApplicationData {
         header,
         data: mut app_data,
@@ -134,13 +131,10 @@ where
     Ok(())
 }
 
-pub(crate) fn encrypt<CipherSuite>(
-    key_schedule: &mut KeySchedule<CipherSuite::Hash, CipherSuite::KeyLen, CipherSuite::IvLen>,
+pub(crate) fn encrypt(
+    key_schedule: &mut KeySchedule,
     buf: &mut CryptoBuffer<'_>,
-) -> Result<usize, TlsError>
-where
-    CipherSuite: TlsCipherSuite + 'static,
-{
+) -> Result<usize, TlsError> {
     let client_key = key_schedule.get_client_key()?;
     let nonce = &key_schedule.get_client_nonce()?;
     // trace!("encrypt key {:02x?}", client_key);
@@ -154,10 +148,6 @@ where
         return Err(TlsError::InsufficientSpace);
     }
 
-    trace!(
-        "output size {}",
-        <CipherSuite::Cipher as AeadCore>::TagSize::to_usize()
-    );
     let len_bytes = (len as u16).to_be_bytes();
     let additional_data = [
         ContentType::ApplicationData as u8,
@@ -173,19 +163,14 @@ where
     Ok(buf.len())
 }
 
-pub fn encode_record<'m, CipherSuite>(
+pub fn encode_record<'m>(
     tx_buf: &mut [u8],
-    key_schedule: &mut KeySchedule<CipherSuite::Hash, CipherSuite::KeyLen, CipherSuite::IvLen>,
-    record: &ClientRecord<'_, 'm, CipherSuite>,
-) -> Result<(CipherSuite::Hash, usize), TlsError>
-where
-    CipherSuite: TlsCipherSuite + 'static,
-{
+    key_schedule: &mut KeySchedule,
+    record: &ClientRecord<'_, 'm>,
+) -> Result<(NegotiatedHash, usize), TlsError> {
     let mut next_hash = key_schedule.transcript_hash().clone();
 
-    let (len, range) = record.encode(tx_buf, &mut next_hash, |buf| {
-        encrypt::<CipherSuite>(key_schedule, buf)
-    })?;
+    let (len, range) = record.encode(tx_buf, &mut next_hash, |buf| encrypt(key_schedule, buf))?;
 
     if let Some(range) = range {
         Digest::update(key_schedule.transcript_hash(), &tx_buf[range]);
@@ -195,14 +180,13 @@ where
 }
 
 #[cfg(feature = "async")]
-pub async fn decode_record<'m, Transport, CipherSuite>(
+pub async fn decode_record<'m, Transport>(
     transport: &mut Transport,
     rx_buf: &'m mut [u8],
-    key_schedule: &mut KeySchedule<CipherSuite::Hash, CipherSuite::KeyLen, CipherSuite::IvLen>,
-) -> Result<ServerRecord<'m, <CipherSuite::Hash as OutputSizeUser>::OutputSize>, TlsError>
+    key_schedule: &mut KeySchedule,
+) -> Result<ServerRecord<'m, Vec<u8, DIGEST_MAX_OUTPUT_SIZE>>, TlsError>
 where
     Transport: AsyncRead + 'm,
-    CipherSuite: TlsCipherSuite + 'static,
 {
     let mut pos: usize = 0;
     let mut header: [u8; 5] = [0; 5];
@@ -231,17 +215,16 @@ where
         pos += read;
     }
 
-    ServerRecord::decode::<CipherSuite::Hash>(header, rx_buf, key_schedule.transcript_hash())
+    ServerRecord::decode(header, rx_buf, key_schedule.transcript_hash())
 }
 
-pub fn decode_record_blocking<'m, Transport, CipherSuite>(
+pub fn decode_record_blocking<'m, Transport>(
     transport: &mut Transport,
     rx_buf: &'m mut [u8],
-    key_schedule: &mut KeySchedule<CipherSuite::Hash, CipherSuite::KeyLen, CipherSuite::IvLen>,
-) -> Result<ServerRecord<'m, <CipherSuite::Hash as OutputSizeUser>::OutputSize>, TlsError>
+    key_schedule: &mut KeySchedule,
+) -> Result<ServerRecord<'m>, TlsError>
 where
     Transport: BlockingRead + 'm,
-    CipherSuite: TlsCipherSuite + 'static,
 {
     let mut pos: usize = 0;
     let mut header: [u8; 5] = [0; 5];
@@ -268,25 +251,19 @@ where
         pos += read;
     }
 
-    ServerRecord::decode::<CipherSuite::Hash>(header, rx_buf, key_schedule.transcript_hash())
+    ServerRecord::decode(header, rx_buf, key_schedule.transcript_hash())
 }
 
-pub struct Handshake<CipherSuite, const CERT_SIZE: usize>
-where
-    CipherSuite: TlsCipherSuite + 'static,
-{
-    traffic_hash: Option<CipherSuite::Hash>,
+pub struct Handshake<const CERT_SIZE: usize> {
+    traffic_hash: Option<NegotiatedHash>,
     secret: Option<EphemeralSecret>,
-    certificate_transcript: Option<CipherSuite::Hash>,
+    certificate_transcript: Option<NegotiatedHash>,
     certificate_request: Option<CertificateRequest>,
     certificate: Option<Certificate<CERT_SIZE>>,
 }
 
-impl<'a, CipherSuite, const CERT_SIZE: usize> Handshake<CipherSuite, CERT_SIZE>
-where
-    CipherSuite: TlsCipherSuite + 'static,
-{
-    pub fn new() -> Handshake<CipherSuite, CERT_SIZE> {
+impl<'a, const CERT_SIZE: usize> Handshake<CERT_SIZE> {
+    pub fn new() -> Handshake<CERT_SIZE> {
         Handshake {
             traffic_hash: None,
             secret: None,
@@ -310,19 +287,18 @@ pub enum State {
 
 impl<'a> State {
     #[cfg(feature = "async")]
-    pub async fn process<Transport, CipherSuite, RNG, Clock, const CERT_SIZE: usize>(
+    pub async fn process<Transport, RNG, Clock, const CERT_SIZE: usize>(
         self,
         transport: &mut Transport,
-        handshake: &mut Handshake<CipherSuite, CERT_SIZE>,
+        handshake: &mut Handshake<CERT_SIZE>,
         record_buf: &mut [u8],
-        key_schedule: &mut KeySchedule<CipherSuite::Hash, CipherSuite::KeyLen, CipherSuite::IvLen>,
-        config: &TlsConfig<'a, CipherSuite>,
+        key_schedule: &mut KeySchedule,
+        config: &TlsConfig<'a>,
         rng: &mut RNG,
     ) -> Result<State, TlsError>
     where
         Transport: AsyncRead + AsyncWrite + 'a,
         RNG: CryptoRng + RngCore + 'a,
-        CipherSuite: TlsCipherSuite + 'static,
         Clock: TlsClock + 'static,
     {
         match self {
@@ -348,8 +324,7 @@ impl<'a> State {
             }
             State::ServerHello => {
                 let record =
-                    decode_record::<Transport, CipherSuite>(transport, record_buf, key_schedule)
-                        .await?;
+                    decode_record::<Transport>(transport, record_buf, key_schedule).await?;
                 process_server_hello(handshake, key_schedule, record)?;
                 Ok(State::ServerVerify)
             }
@@ -359,8 +334,7 @@ impl<'a> State {
                     core::mem::size_of_val(&records)
                 );*/
                 let record =
-                    decode_record::<Transport, CipherSuite>(transport, record_buf, key_schedule)
-                        .await?;
+                    decode_record::<Transport>(transport, record_buf, key_schedule).await?;
 
                 Ok(process_server_verify::<_, Clock, CERT_SIZE>(
                     handshake,
@@ -389,7 +363,7 @@ impl<'a> State {
                 };
 
                 let client_handshake = ClientHandshake::ClientCert(certificate);
-                let client_cert: ClientRecord<'a, '_, CipherSuite> =
+                let client_cert: ClientRecord<'a, '_> =
                     ClientRecord::Handshake(client_handshake, true);
 
                 let (next_hash, len) = encode_record(record_buf, key_schedule, &client_cert)?;
@@ -406,7 +380,7 @@ impl<'a> State {
                     .create_client_finished()
                     .map_err(|_| TlsError::InvalidHandshake)?;
 
-                let client_finished = ClientHandshake::<CipherSuite>::Finished(client_finished);
+                let client_finished = ClientHandshake::Finished(client_finished);
                 let client_finished = ClientRecord::Handshake(client_finished, true);
 
                 let (_, len) = encode_record(record_buf, key_schedule, &client_finished)?;
@@ -430,19 +404,18 @@ impl<'a> State {
         }
     }
 
-    pub fn process_blocking<Transport, CipherSuite, RNG, Clock, const CERT_SIZE: usize>(
+    pub fn process_blocking<Transport, RNG, Clock, const CERT_SIZE: usize>(
         self,
         transport: &mut Transport,
-        handshake: &mut Handshake<CipherSuite, CERT_SIZE>,
+        handshake: &mut Handshake<CERT_SIZE>,
         record_buf: &mut [u8],
-        key_schedule: &mut KeySchedule<CipherSuite::Hash, CipherSuite::KeyLen, CipherSuite::IvLen>,
-        config: &TlsConfig<'a, CipherSuite>,
+        key_schedule: &mut KeySchedule,
+        config: &TlsConfig<'a>,
         rng: &mut RNG,
     ) -> Result<State, TlsError>
     where
         Transport: BlockingRead + BlockingWrite + 'a,
         RNG: CryptoRng + RngCore,
-        CipherSuite: TlsCipherSuite + 'static,
         Clock: TlsClock + 'static,
     {
         match self {
@@ -466,11 +439,8 @@ impl<'a> State {
                 }
             }
             State::ServerHello => {
-                let record = decode_record_blocking::<Transport, CipherSuite>(
-                    transport,
-                    record_buf,
-                    key_schedule,
-                )?;
+                let record =
+                    decode_record_blocking::<Transport>(transport, record_buf, key_schedule)?;
                 process_server_hello(handshake, key_schedule, record)?;
                 Ok(State::ServerVerify)
             }
@@ -479,11 +449,8 @@ impl<'a> State {
                     "SIZE of server record queue : {}",
                     core::mem::size_of_val(&records)
                 );*/
-                let record = decode_record_blocking::<Transport, CipherSuite>(
-                    transport,
-                    record_buf,
-                    key_schedule,
-                )?;
+                let record =
+                    decode_record_blocking::<Transport>(transport, record_buf, key_schedule)?;
 
                 Ok(process_server_verify::<_, Clock, CERT_SIZE>(
                     handshake,
@@ -508,7 +475,7 @@ impl<'a> State {
                     certificate.add(cert.into())?;
                 }
                 let client_handshake = ClientHandshake::ClientCert(certificate);
-                let client_cert: ClientRecord<'a, '_, CipherSuite> =
+                let client_cert: ClientRecord<'a, '_> =
                     ClientRecord::Handshake(client_handshake, true);
 
                 let (next_hash, len) = encode_record(record_buf, key_schedule, &client_cert)?;
@@ -524,7 +491,7 @@ impl<'a> State {
                     .create_client_finished()
                     .map_err(|_| TlsError::InvalidHandshake)?;
 
-                let client_finished = ClientHandshake::<CipherSuite>::Finished(client_finished);
+                let client_finished = ClientHandshake::Finished(client_finished);
                 let client_finished = ClientRecord::Handshake(client_finished, true);
 
                 let (_, len) = encode_record(record_buf, key_schedule, &client_finished)?;
@@ -548,14 +515,11 @@ impl<'a> State {
     }
 }
 
-fn process_server_hello<CipherSuite, const CERT_SIZE: usize>(
-    handshake: &mut Handshake<CipherSuite, CERT_SIZE>,
-    key_schedule: &mut KeySchedule<CipherSuite::Hash, CipherSuite::KeyLen, CipherSuite::IvLen>,
-    record: ServerRecord<'_, <CipherSuite::Hash as OutputSizeUser>::OutputSize>,
-) -> Result<(), TlsError>
-where
-    CipherSuite: TlsCipherSuite + 'static,
-{
+fn process_server_hello<const CERT_SIZE: usize>(
+    handshake: &mut Handshake<CERT_SIZE>,
+    key_schedule: &mut KeySchedule,
+    record: ServerRecord<'_>,
+) -> Result<(), TlsError> {
     {
         match record {
             ServerRecord::Handshake(server_handshake) => match server_handshake {
@@ -578,18 +542,17 @@ where
     }
 }
 
-fn process_server_verify<'a, CipherSuite, Clock, const CERT_SIZE: usize>(
-    handshake: &mut Handshake<CipherSuite, CERT_SIZE>,
-    key_schedule: &mut KeySchedule<CipherSuite::Hash, CipherSuite::KeyLen, CipherSuite::IvLen>,
-    config: &TlsConfig<'a, CipherSuite>,
-    record: ServerRecord<'_, <CipherSuite::Hash as OutputSizeUser>::OutputSize>,
+fn process_server_verify<'a, Clock, const CERT_SIZE: usize>(
+    handshake: &mut Handshake<CERT_SIZE>,
+    key_schedule: &mut KeySchedule,
+    config: &TlsConfig<'a>,
+    record: ServerRecord<'_>,
 ) -> Result<State, TlsError>
 where
-    CipherSuite: TlsCipherSuite + 'static,
     Clock: TlsClock + 'static,
 {
     let mut records = Queue::new();
-    decrypt_record::<CipherSuite>(key_schedule, &mut records, record)?;
+    decrypt_record(key_schedule, &mut records, record)?;
 
     let mut state = State::ServerVerify;
     while let Some(record) = records.dequeue() {

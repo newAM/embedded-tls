@@ -16,6 +16,7 @@ keywords = ["embedded", "async", "tls", "no_std", "network"]
 exclude = [".github"]
 
 [dependencies]
+cfg-if = "1"
 p256 = { version = "0.11", default-features = false, features = [ "ecdh", "arithmetic" ] }
 rand_core = { version = "0.6.3", default-features = false }
 hkdf = "0.12.3"
@@ -47,8 +48,9 @@ log = "0.4"
 pem-parser = "0.1.1"
 
 [features]
-default = ["std", "async", "log", "tokio"]
+default = ["std", "async", "log", "tokio", "tls_aes_256_gcm_sha384"]
 defmt = ["dep:defmt", "embedded-io/defmt", "heapless/defmt-impl"]
 std = ["embedded-io/std"]
 tokio = ["embedded-io/tokio"]
 async = ["embedded-io/async"]
+tls_aes_256_gcm_sha384 = []

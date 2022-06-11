@@ -1,7 +1,7 @@
 use crate::application_data::ApplicationData;
 use crate::buffer::*;
 use crate::change_cipher_spec::ChangeCipherSpec;
-use crate::config::{TlsCipherSuite, TlsConfig};
+use crate::config::TlsConfig;
 use crate::content_types::ContentType;
 use crate::handshake::client_hello::ClientHello;
 use crate::handshake::{ClientHandshake, ServerHandshake};
@@ -15,22 +15,14 @@ use sha2::Digest;
 
 pub type Encrypted = bool;
 
-pub enum ClientRecord<'config, 'a, CipherSuite>
-where
-    // N: ArrayLength<u8>,
-    CipherSuite: TlsCipherSuite,
-{
-    Handshake(ClientHandshake<'config, 'a, CipherSuite>, Encrypted),
+pub enum ClientRecord<'config, 'a> {
+    Handshake(ClientHandshake<'config, 'a>, Encrypted),
     ChangeCipherSpec(ChangeCipherSpec, Encrypted),
     Alert(Alert, Encrypted),
     ApplicationData(&'a [u8]),
 }
 
-impl<'config, 'a, CipherSuite> ClientRecord<'config, 'a, CipherSuite>
-where
-    //N: ArrayLength<u8>,
-    CipherSuite: TlsCipherSuite,
-{
+impl<'config, 'a> ClientRecord<'config, 'a> {
     pub fn content_type(&self) -> ContentType {
         match self {
             ClientRecord::Handshake(_, false) => ContentType::Handshake,
@@ -43,10 +35,7 @@ where
         }
     }
 
-    pub fn client_hello<RNG>(
-        config: &'config TlsConfig<'config, CipherSuite>,
-        rng: &mut RNG,
-    ) -> Self
+    pub fn client_hello<RNG>(config: &'config TlsConfig<'config>, rng: &mut RNG) -> Self
     where
         RNG: CryptoRng + RngCore,
     {
@@ -162,8 +151,8 @@ where
 
 #[derive(Debug)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
-pub enum ServerRecord<'a, N: ArrayLength<u8>> {
-    Handshake(ServerHandshake<'a, N>),
+pub enum ServerRecord<'a> {
+    Handshake(ServerHandshake<'a>),
     ChangeCipherSpec(ChangeCipherSpec),
     Alert(Alert),
     ApplicationData(ApplicationData<'a>),
@@ -196,12 +185,12 @@ impl RecordHeader {
     }
 }
 
-impl<'a, N: ArrayLength<u8>> ServerRecord<'a, N> {
+impl<'a> ServerRecord<'a> {
     pub fn decode<D>(
         header: RecordHeader,
         rx_buf: &'a mut [u8],
         digest: &mut D,
-    ) -> Result<ServerRecord<'a, N>, TlsError>
+    ) -> Result<ServerRecord<'a>, TlsError>
     where
         D: Digest,
     {

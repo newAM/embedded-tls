@@ -53,6 +53,8 @@
 //! }
 //! ```
 
+#![allow(unused_imports)] // TODO: remove
+
 pub(crate) mod fmt;
 
 use parse_buffer::ParseError;
@@ -83,15 +85,12 @@ mod verify;
 // TODO: Fix `ring` crate to build for ARM embedded targets
 #[cfg(not(feature = "webpki"))]
 mod verify {
-    pub(crate) fn verify_signature<'a, CipherSuite>(
-        config: &crate::config::TlsConfig<'a, CipherSuite>,
+    pub(crate) fn verify_signature<'a>(
+        config: &crate::config::TlsConfig<'a>,
         _message: &[u8],
         _certificate: crate::handshake::certificate::CertificateRef,
         _verify: crate::handshake::certificate_verify::CertificateVerify,
-    ) -> Result<(), crate::TlsError>
-    where
-        CipherSuite: crate::config::TlsCipherSuite + 'static,
-    {
+    ) -> Result<(), crate::TlsError> {
         if config.verify_cert {
             todo!("Not implemented!")
         } else {
@@ -99,14 +98,11 @@ mod verify {
         }
     }
 
-    pub(crate) fn verify_certificate<'a, CipherSuite>(
-        config: &crate::config::TlsConfig<'a, CipherSuite>,
+    pub(crate) fn verify_certificate<'a>(
+        config: &crate::config::TlsConfig<'a>,
         _certificate: &crate::handshake::certificate::CertificateRef,
         _now: Option<u64>,
-    ) -> Result<(), crate::TlsError>
-    where
-        CipherSuite: crate::config::TlsCipherSuite + 'static,
-    {
+    ) -> Result<(), crate::TlsError> {
         if config.verify_cert {
             todo!("Not implemented!")
         } else {
