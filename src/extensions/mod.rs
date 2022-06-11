@@ -90,7 +90,7 @@ pub enum ClientExtension<'a> {
         supported_signature_algorithms: Vec<SignatureScheme, 16>,
     },
     MaxFragmentLength(MaxFragmentLength),
-    PreSharedKey { keys: &'a [Psk<'a>] },
+    PreSharedKey { psk: Psk<'a> },
 }
 
 impl ClientExtension<'_> {
@@ -200,8 +200,24 @@ impl ClientExtension<'_> {
                 //info!("max fragment length");
                 buf.push(*len as u8).map_err(|_| TlsError::EncodeError)?;
             }
-            ClientExtension::PreSharedKey { keys } => {
+            ClientExtension::PreSharedKey { psk } => {
+                // At the moment only externally established identities are supported
+                //
+                // For identities established externally, an obfuscated_ticket_age of 0
+                // SHOULD be used.
+                const OBFUSCATED_TICKET_AGE: u32 = 0;
 
+                buf.extend_from_slice(&extension_len.to_be_bytes());
+                buf.extend_from_slice(&identities_len.to_be_bytes());
+                buf.extend_from_slice(&identity_len.to_be_bytes());
+                buf.extend_from_slice(identity);
+                buf.extend_from_slice(&OBFUSCATED_TICKET_AGE.to_be_bytes());
+                let truncated_transcript_hash: Sha256 = writer.key_schedule.transcript_hash();
+                buf.extend_from_slice(&BINDERS_LEN.to_be_bytes());
+                buf.extend_from_slice(&[BINDER_LEN]);
+                buf.write_binder(psk, truncated_transcript_hash);
+
+                // buf.extend_from_slice().map_err(|_| TlsError::EncodeError)?
             }
         }
 

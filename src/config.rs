@@ -33,16 +33,29 @@ impl TlsCipherSuite for Aes128GcmSha256 {
     type Hash = Sha256;
 }
 
-pub(crate) struct Psk<'a> {
-    psk: &'a [u8],
+/// Pre-shared key
+#[derive(Clone, Copy)]
+pub struct Psk<'a> {
     identity: &'a [u8],
+    key: &'a [u8],
+}
+
+impl<'a> Psk<'a> {
+    /// Create a new pre-shared key
+    pub const fn new(identity: &'a [u8], key: &'a [u8]) -> Self {
+        Psk { identity, key }
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.identity.len() + self.key.len()
+    }
 }
 
 impl<'a> core::fmt::Debug for Psk<'a> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("Psk")
-            .field("psk", &"...")
             .field("identity", &self.identity)
+            .field("key", &"...")
             .finish()
     }
 }
@@ -50,7 +63,7 @@ impl<'a> core::fmt::Debug for Psk<'a> {
 #[cfg(feature = "defmt")]
 impl<'a> defmt::Format for Psk<'a> {
     fn format(&self, fmt: defmt::Formatter) {
-        defmt::write!(fmt, "Psk {{ psk: ..., identity: {:?} }}", self.identity)
+        defmt::write!(fmt, "Psk {{ identity: {:?}, key: ... }}", self.identity)
     }
 }
 
@@ -204,8 +217,8 @@ where
         self
     }
 
-    pub fn with_psk(mut self, identity: &'a [u8], psk: &'a [u8]) -> Self {
-        self.psk = Some(Psk { identity, psk });
+    pub fn with_psk(mut self, psk: Psk<'a>) -> Self {
+        self.psk = Some(psk);
         self
     }
 }
