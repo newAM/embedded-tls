@@ -116,10 +116,10 @@ mod verify {
 }
 
 #[cfg(feature = "async")]
-mod tls_connection;
+mod asynch;
 
 #[cfg(feature = "async")]
-pub use tls_connection::*;
+pub use asynch::*;
 
 #[derive(Debug, Copy, Clone)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
@@ -155,6 +155,15 @@ pub enum TlsError {
     EncodeError,
     DecodeError,
     Io(embedded_io::ErrorKind),
+}
+
+impl embedded_io::Error for TlsError {
+    fn kind(&self) -> embedded_io::ErrorKind {
+        match self {
+            Self::Io(k) => k.clone(),
+            _ => embedded_io::ErrorKind::Other,
+        }
+    }
 }
 
 #[cfg(feature = "std")]
