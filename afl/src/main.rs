@@ -1,8 +1,8 @@
 mod not_rng;
 
-use embedded_tls::blocking::{Aes128GcmSha256, TlsConfig, TlsConnection, TlsContext};
-use embedded_tls::traits::{Read, Write};
-use embedded_tls::{NoClock, TlsError};
+use embedded_io::blocking::{Read, Write};
+use embedded_tls::blocking::{Aes128GcmSha256, NoVerify, TlsConfig, TlsConnection, TlsContext};
+use embedded_tls::TlsError;
 use not_rng::NotRng;
 
 pub struct Fuzz<'b> {
@@ -16,8 +16,12 @@ impl<'b> From<&'b [u8]> for Fuzz<'b> {
     }
 }
 
+impl<'b> embedded_io::Io for Fuzz<'b> {
+    type Error = TlsError;
+}
+
 impl<'b> Read for Fuzz<'b> {
-    fn read<'m>(&'m mut self, buf: &'m mut [u8]) -> Result<usize, TlsError> {
+    fn read<'m>(&'m mut self, buf: &'m mut [u8]) -> Result<usize, Self::Error> {
         let fuzz: &[u8] = self
             .buf
             .get(self.ptr..(self.ptr + buf.len()))
@@ -29,15 +33,17 @@ impl<'b> Read for Fuzz<'b> {
 }
 
 impl<'b> Write for Fuzz<'b> {
-    fn write<'m>(&'m mut self, buf: &'m [u8]) -> Result<usize, TlsError> {
+    fn write<'m>(&'m mut self, buf: &'m [u8]) -> Result<usize, Self::Error> {
         Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> Result<(), Self::Error> {
+        Ok(())
     }
 }
 
 fn main() {
-    let config = TlsConfig::new()
-        .with_server_name("localhost")
-        .verify_cert(false);
+    let config = TlsConfig::new().with_server_name("localhost");
 
     afl::fuzz!(|data: &[u8]| {
         let fuzz: Fuzz = data.into();
@@ -47,6 +53,6 @@ fn main() {
         let mut rng = NotRng::default();
 
         // ignore the result - only looking for internal panics
-        let _ = tls.open::<NotRng, NoClock, 4096>(TlsContext::new(&config, &mut rng));
+        let _ = tls.open::<NotRng, NoVerify>(TlsContext::new(&config, &mut rng));
     });
 }

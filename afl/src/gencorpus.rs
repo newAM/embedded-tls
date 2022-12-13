@@ -1,8 +1,7 @@
 mod not_rng;
 
-use embedded_tls::blocking::{Aes128GcmSha256, TlsConfig, TlsConnection, TlsContext};
-use embedded_tls::traits::{Read as TlsRead, Write as TlsWrite};
-use embedded_tls::{NoClock, TlsError};
+use embedded_tls::blocking::{Aes128GcmSha256, NoVerify, TlsConfig, TlsConnection, TlsContext};
+use embedded_tls::TlsError;
 use not_rng::NotRng;
 use std::fs::File;
 use std::io::{Read, Write};
@@ -13,25 +12,32 @@ struct LoggedStream {
     corpus: File,
 }
 
-impl TlsRead for LoggedStream {
-    fn read<'m>(&'m mut self, buf: &'m mut [u8]) -> Result<usize, TlsError> {
+impl embedded_io::Io for LoggedStream {
+    type Error = TlsError;
+}
+
+impl embedded_io::blocking::Read for LoggedStream {
+    fn read(&mut self, buf: &mut [u8]) -> Result<usize, Self::Error> {
         let len = Read::read(&mut self.stream, buf).unwrap();
         self.corpus.write_all(&buf[..len]).unwrap();
         Ok(len)
     }
 }
 
-impl TlsWrite for LoggedStream {
-    fn write<'m>(&'m mut self, buf: &'m [u8]) -> Result<usize, TlsError> {
+impl embedded_io::blocking::Write for LoggedStream {
+    fn write(&mut self, buf: &[u8]) -> Result<usize, Self::Error> {
         let len = Write::write(&mut self.stream, buf).unwrap();
         Ok(len)
+    }
+
+    fn flush(&mut self) -> Result<(), Self::Error> {
+        self.stream.flush().unwrap();
+        Ok(())
     }
 }
 
 fn main() {
-    let config = TlsConfig::new()
-        .with_server_name("localhost")
-        .verify_cert(false);
+    let config = TlsConfig::new().with_server_name("localhost");
 
     let corpus: File = File::create("corpus").unwrap();
     let stream = TcpStream::connect("127.0.0.1:12345").expect("error connecting to server");
@@ -43,6 +49,6 @@ fn main() {
         TlsConnection::new(logged_stream, &mut record_buffer);
     let mut rng = NotRng::default();
 
-    tls.open::<NotRng, NoClock, 4096>(TlsContext::new(&config, &mut rng))
+    tls.open::<NotRng, NoVerify>(TlsContext::new(&config, &mut rng))
         .unwrap();
 }
